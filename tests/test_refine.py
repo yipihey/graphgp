@@ -63,6 +63,20 @@ def test_fast_jit(setup_graph):
     check_equal(v1, v2, rtol=1e-12, text="Fast JIT does not match simple implementation.")
 
 
+def test_chunked_matches(setup_graph):
+    graph, covariance, points = setup_graph
+    xi = jr.normal(rng, (graph.points.shape[0],))
+
+    v_full = jax.jit(gp.generate)(graph, covariance, xi)
+    # chunk sizes that do and do not evenly divide the number of refined points
+    for cs in (1, 7, 64, 256, 100000):
+        v_chunk = jax.jit(Partial(gp.generate, chunk_size=cs))(graph, covariance, xi)
+        check_equal(
+            v_full, v_chunk, rtol=1e-12,
+            text=f"Chunked generation (chunk_size={cs}) does not match full within rtol=1e-12.",
+        )
+
+
 def test_approaches_dense():
     points = jr.normal(rng, (1000, 3))
     graph = gp.build_graph(points, n0=200, k=200)

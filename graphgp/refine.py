@@ -25,6 +25,7 @@ def generate(
     *,
     cuda: bool = False,
     fast_jit: bool = True,
+    chunk_size: int | None = None,
 ) -> Array:
     """
     Generate a GP with dense Cholesky for the first layer followed by conditional refinement.
@@ -37,6 +38,7 @@ def generate(
         reorder: Whether to reorder parameters and values according to the original order of the points. Default is ``True``.
         cuda: Whether to use optional CUDA extension, if installed. Will still use CUDA GPU via JAX if available. Default is ``False`` but recommended if possible for performance.
         fast_jit: Whether to use version of refinement that compiles faster, if cuda=False. Default is ``True`` but runtime performance and memory usage will suffer slightly.
+        chunk_size: If set (and ``cuda=False``, ``fast_jit=True``), the per-point covariance factorizations are computed in chunks of this many points instead of all at once. Peak memory for the factorization step becomes ``O(chunk_size * (k+1)**2 * d)`` instead of ``O(N * (k+1)**2 * d)``, enabling generation of very large point sets on a single GPU. Results are identical to ``chunk_size=None``.
 
     Returns:
         The generated values of shape ``(N,).``
@@ -48,7 +50,8 @@ def generate(
         xi = xi[graph.indices]
     initial_values = generate_dense(graph.points[:n0], covariance, xi[:n0])
     values = refine(
-        graph.points, graph.neighbors, graph.offsets, covariance, initial_values, xi[n0:], cuda=cuda, fast_jit=fast_jit
+        graph.points, graph.neighbors, graph.offsets, covariance, initial_values, xi[n0:],
+        cuda=cuda, fast_jit=fast_jit, chunk_size=chunk_size,
     )
     if graph.indices is not None:
         values = jnp.empty_like(values).at[graph.indices].set(values, unique_indices=True)
@@ -86,6 +89,7 @@ def refine(
     *,
     cuda: bool = False,
     fast_jit: bool = True,
+    chunk_size: int | None = None,
 ) -> Array:
     """
     Conditionally generate using initial values according to GraphGP algorithm. Most users can use ``generate``, which
@@ -126,13 +130,22 @@ def refine(
         values = jnp.zeros(len(points))
         values = values.at[:n0].set(initial_values)
 
-        # Precompute matrix factorizations for all points
+        # Precompute matrix factorizations for all points. These depend only
+        # on point geometry (not on generated values), so they may be computed
+        # in chunks to bound peak memory without changing the result.
         coarse_points = points[neighbors]
         joint_points = jnp.concatenate([coarse_points, points[n0:, None]], axis=1)
-        K = jax.vmap(compute_cov_matrix, in_axes=(None, 0, 0))(covariance, joint_points, joint_points)
-        L = jnp.linalg.cholesky(K)
-        mean_vec = jnp.linalg.solve(L[:, :k, :k].transpose(0, 2, 1), L[:, k, :k][..., None]).squeeze(-1)
-        std = L[:, k, k]
+        if chunk_size is None:
+            K = jax.vmap(compute_cov_matrix, in_axes=(None, 0, 0))(covariance, joint_points, joint_points)
+            L = jnp.linalg.cholesky(K)
+            mean_vec = jnp.linalg.solve(L[:, :k, :k].transpose(0, 2, 1), L[:, k, :k][..., None]).squeeze(-1)
+            std = L[:, k, k]
+        else:
+            # Chunked: identical math, peak memory O(chunk_size * (k+1)**2 * d).
+            mean_vec, std = lax.map(
+                lambda jp: _factorize_joint_point(covariance, jp, k),
+                joint_points, batch_size=int(chunk_size),
+            )
 
         # For each batch defined by offsets, dot neighbor values with mean_vec and add noise
         def step(values, start):
@@ -273,6 +286,22 @@ def refine_logdet(
         std = L[:, k, k]
         logdet = jnp.sum(jnp.log(std))
     return logdet
+
+
+def _factorize_joint_point(covariance, joint_point, k):
+    """Per-point Vecchia factorization used by the chunked refine path.
+
+    ``joint_point`` has shape ``(k+1, d)`` (k coarse neighbors followed by the
+    fine point). Returns ``(mean_vec, std)`` of shapes ``(k,)`` and ``()`` —
+    the conditional-mean weights and conditional standard deviation. This is
+    the single-point version of the batched computation in ``refine``; mapping
+    it with a bounded ``batch_size`` caps peak memory at chunk granularity.
+    """
+    K = compute_cov_matrix(covariance, joint_point, joint_point)
+    L = jnp.linalg.cholesky(K)
+    mean_vec = jnp.linalg.solve(L[:k, :k].T, L[k, :k])
+    std = L[k, k]
+    return mean_vec, std
 
 
 def _conditional_mean_std(covariance, coarse_points, coarse_values, fine_point):
