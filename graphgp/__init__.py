@@ -18,9 +18,19 @@ from .refine import (
     refine_logdet,
     compute_cov_matrix,
 )
+from .aniso import (
+    AnisotropicCovariance,
+    aniso_evaluate,
+    embed_points,
+    build_anisotropic_covariance,
+)
 from . import extras
 
 __all__ = [
+    "AnisotropicCovariance",
+    "aniso_evaluate",
+    "embed_points",
+    "build_anisotropic_covariance",
     "build_tree",
     "query_preceding_neighbors",
     "Graph",

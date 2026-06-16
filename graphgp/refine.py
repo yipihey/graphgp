@@ -9,6 +9,7 @@ from jax import lax
 import numpy as np
 
 from .graph import Graph
+from .aniso import AnisotropicCovariance, aniso_evaluate
 
 try:
     import graphgp_cuda
@@ -314,7 +315,9 @@ def _conditional_mean_std(covariance, coarse_points, coarse_values, fine_point):
     return mean, std
 
 
-def compute_cov_matrix(covariance: Tuple[Array, Array], points_a: Array, points_b: Array) -> Array:
+def compute_cov_matrix(covariance, points_a: Array, points_b: Array) -> Array:
+    if isinstance(covariance, AnisotropicCovariance):
+        return aniso_evaluate(covariance, points_a, points_b)
     distances = jnp.expand_dims(points_a, -2) - jnp.expand_dims(points_b, -3)
     distances = jnp.linalg.norm(distances, axis=-1)
     if isinstance(covariance, Tuple) and isinstance(covariance[0], Array) and isinstance(covariance[1], Array):
