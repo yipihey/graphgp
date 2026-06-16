@@ -24,6 +24,7 @@ from .aniso import (
     embed_points,
     build_anisotropic_covariance,
 )
+from .multiscale import build_multiscale_graph
 from . import extras
 
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     "aniso_evaluate",
     "embed_points",
     "build_anisotropic_covariance",
+    "build_multiscale_graph",
     "build_tree",
     "query_preceding_neighbors",
     "Graph",
