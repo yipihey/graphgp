@@ -25,6 +25,7 @@ from .aniso import (
     build_anisotropic_covariance,
 )
 from .multiscale import build_multiscale_graph
+from .additive import generate_conditional, generate_additive
 from . import extras
 
 __all__ = [
@@ -33,6 +34,8 @@ __all__ = [
     "embed_points",
     "build_anisotropic_covariance",
     "build_multiscale_graph",
+    "generate_conditional",
+    "generate_additive",
     "build_tree",
     "query_preceding_neighbors",
     "Graph",
