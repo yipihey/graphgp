@@ -79,6 +79,7 @@ def build_multiscale_graph(
     n_levels: int = 8,
     seed: int = 0,
     indices: Optional[np.ndarray] = None,
+    corr_length: Optional[float] = None,
 ) -> Graph:
     """Build a multi-scale (scale-ladder) GraphGP dependency graph.
 
@@ -87,6 +88,19 @@ def build_multiscale_graph(
     the realized field reproduces broad / long-range kernels that the stock
     nearest-neighbour graph screens out. Drop-in for :func:`graphgp.generate`.
 
+    Conditioning (a rule worth banking): the latent covariance becomes
+    ill-conditioned when the point spacing falls far *below* the kernel
+    correlation length -- neighbouring nodes are then almost perfectly
+    correlated, the per-node conditional covariance blocks go singular, and the
+    sampler diverges. (Wechsler's v0 field pipeline hit exactly this: an
+    N_side=512 voxel ~1 h^-1Mpc against a 5 h^-1Mpc Matern length diverged,
+    while N_side=256 -- cells comparable to the length -- converged; it is the
+    same pathology as hard-core-flattening a kernel collapsing the Vecchia
+    blocks.) Keep node spacing comparable to (not far below) the kernel scale.
+    Pass ``corr_length`` to get a warning when the finest-level median
+    nearest-neighbour spacing is < 1/3 of it (purely diagnostic; no effect on
+    the graph).
+
     Args:
         points: ``(N, d)`` point locations (already embedded if anisotropic).
         k: Total neighbours per point (levels >= 1).
@@ -94,6 +108,8 @@ def build_multiscale_graph(
         n_levels: Number of geometric resolution levels.
         seed: Seed for the random nested sub-sampling.
         indices: Optional original-index array; defaults to the permutation.
+        corr_length: Optional kernel correlation length (same units as
+            ``points``) for the conditioning diagnostic above.
 
     Returns:
         A :class:`~graphgp.graph.Graph` with level-boundary ``offsets`` and
@@ -105,6 +121,20 @@ def build_multiscale_graph(
     n = len(pts)
     if n0 < k:
         raise ValueError(f"n0 must be at least k. Got n0={n0}, k={k}.")
+
+    if corr_length is not None and n > 1:
+        # finest-level median nearest-neighbour spacing vs the kernel length
+        sample = pts if n <= 5000 else pts[np.random.default_rng(seed).choice(n, 5000, replace=False)]
+        d_nn, _ = cKDTree(sample).query(sample, k=2, workers=-1)
+        spacing = float(np.median(d_nn[:, 1]))
+        if spacing < corr_length / 3.0:
+            import warnings
+            warnings.warn(
+                f"build_multiscale_graph: median node spacing {spacing:.3g} is < 1/3 of the "
+                f"kernel correlation length {corr_length:.3g}; the latent covariance is likely "
+                f"ill-conditioned (near-perfectly-correlated neighbours). Consider coarser points "
+                f"(spacing ~ correlation length) to keep the conditional blocks well-conditioned.",
+                stacklevel=2)
 
     rng = np.random.default_rng(seed)
     perm = rng.permutation(n)
